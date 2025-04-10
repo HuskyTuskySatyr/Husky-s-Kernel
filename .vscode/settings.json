@@ -1,0 +1,32 @@
+{
+    "files.associations": {
+        "stddef.h": "c",
+        "keyboard.h": "c",
+        "usb.h": "c",
+        "system.h": "c",
+        "kernel.h": "c",
+        "stdint.h": "c",
+        "xlocale": "c",
+        "xstring": "c",
+        "atomic": "cpp",
+        "bit": "cpp",
+        "charconv": "cpp",
+        "compare": "cpp",
+        "cstddef": "cpp",
+        "format": "cpp",
+        "iterator": "cpp",
+        "limits": "cpp",
+        "memory": "cpp",
+        "system_error": "cpp",
+        "type_traits": "cpp",
+        "xiosbase": "cpp",
+        "xlocbuf": "cpp",
+        "xlocmon": "cpp",
+        "xloctime": "cpp",
+        "xmemory": "cpp",
+        "xutility": "cpp",
+        "stdio.h": "c"
+    },
+    "makefile.configureOnOpen": false,
+    "C_Cpp.errorSquiggles": "disabled"
+}

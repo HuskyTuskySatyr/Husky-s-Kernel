@@ -1,0 +1,332 @@
+//
+// Here is the slighlty complicated ACPI poweroff code
+//
+
+#include <stddef.h>
+#include "system.h"
+#include "../Drivers/kernel.h"
+#include "time.h"
+typedef uint32_t dword;   // DWORD = unsigned 32 bit value
+typedef uint16_t word;    // WORD = unsigned 16 bit value
+typedef uint8_t byte;     // BYTE = unsigned 8 bit value
+
+dword *SMI_CMD;
+byte ACPI_ENABLE;
+byte ACPI_DISABLE;
+dword *PM1a_CNT;
+dword *PM1b_CNT;
+word SLP_TYPa;
+word SLP_TYPb;
+word SLP_EN;
+word SCI_EN;
+byte PM1_CNT_LEN;
+
+#define HEAP_SIZE 0x100000  // 1MB heap
+static uint8_t heap[HEAP_SIZE];  // Heap memory
+static size_t heap_index = 0;    // Tracks the next free byte in the heap
+
+int memcmp(const void *s1, const void *s2, size_t n) {
+    const unsigned char *p1 = s1, *p2 = s2;
+    for (size_t i = 0; i < n; ++i) {
+        if (p1[i] != p2[i]) {
+            return p1[i] - p2[i];
+        }
+    }
+    return 0;
+}
+
+void* malloc(size_t size) {
+    if (heap_index + size > HEAP_SIZE) return NULL;  // Out of memory
+    void* ptr = &heap[heap_index];
+    heap_index += size;
+    return ptr;
+}
+
+// Simple memset implementation
+void* memset(void* ptr, int value, size_t num) {
+    uint8_t* p = (uint8_t*)ptr;
+    for (size_t i = 0; i < num; i++) {
+        p[i] = (uint8_t)value;
+    }
+    return ptr;
+}
+
+// Simple mmap implementation (stub)
+void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+    // For now, just return a pointer from our heap
+    return malloc(length);
+}
+
+void wrstr(const char *str) {
+    printk("%s", str);  // Use printk to write the entire string
+}
+
+static inline uint16_t inw2(uint16_t port) {
+    uint16_t result;
+    asm volatile("inw %1, %0" : "=a"(result) : "d"(port));
+    return result;
+}
+
+static inline void outw2(uint16_t port, uint16_t value) {
+    asm volatile("outw %0, %1" : : "a"(value), "d"(port));
+}
+
+
+struct RSDPtr
+{
+	byte Signature[8];
+	byte CheckSum;
+	byte OemID[6];
+	byte Revision;
+	dword *RsdtAddress;
+};
+
+
+
+struct FACP
+{
+	byte Signature[4];
+	dword Length;
+	byte unneded1[40 - 8];
+	dword *DSDT;
+	byte unneded2[48 - 44];
+	dword *SMI_CMD;
+	byte ACPI_ENABLE;
+	byte ACPI_DISABLE;
+	byte unneded3[64 - 54];
+	dword *PM1a_CNT_BLK;
+	dword *PM1b_CNT_BLK;
+	byte unneded4[89 - 72];
+	byte PM1_CNT_LEN;
+};
+
+
+
+// check if the given address has a valid header
+unsigned int *acpiCheckRSDPtr(unsigned int *ptr)
+{
+	char *sig = "RSD PTR ";
+	struct RSDPtr *rsdp = (struct RSDPtr *) ptr;
+	byte *bptr;
+	byte check = 0;
+	int i;
+
+	if (memcmp(sig, rsdp, 8) == 0)
+	{
+		// check checksum rsdpd
+		bptr = (byte *) ptr;
+		for (i=0; i<sizeof(struct RSDPtr); i++)
+		{
+			check += *bptr;
+			bptr++;
+		}
+
+		// found valid rsdpd	
+		if (check == 0) {
+			/*
+			 if (desc->Revision == 0)
+				wrstr("acpi 1");
+			else
+				wrstr("acpi 2");
+			*/
+			return (unsigned int *) rsdp->RsdtAddress;
+		}
+	}
+
+	return NULL;
+}
+
+
+
+// Finds the acpi header and returns the address of the rsdt
+unsigned int *acpiGetRSDPtr(void)
+{
+	unsigned int *addr;
+	unsigned int *rsdp;
+
+	// Search below the 1mb mark for RSDP signature
+	for (addr = (unsigned int *) 0x000E0000; (int) addr<0x00100000; addr += 0x10/sizeof(addr))
+	{
+		rsdp = acpiCheckRSDPtr(addr);
+		if (rsdp != NULL)
+			return rsdp;
+	}
+
+
+	// At address 0x40:0x0E is the RM segment of the ebda
+	int ebda = *((short *) 0x40E);	// get pointer
+	ebda = ebda*0x10 &0x000FFFFF;	// transform segment into linear address
+
+	// Search Extended BIOS Data Area for the Root System Description Pointer signature
+	for (addr = (unsigned int *) ebda; (int) addr<ebda+1024; addr+= 0x10/sizeof(addr))
+	{
+		rsdp = acpiCheckRSDPtr(addr);
+		if (rsdp != NULL)
+			return rsdp;
+	}
+
+	return NULL;
+}
+
+
+
+// Checks for a given header and validates checksum
+int acpiCheckHeader(unsigned int *ptr, char *sig)
+{
+	if (memcmp(ptr, sig, 4) == 0)
+	{
+		char *checkPtr = (char *) ptr;
+		int len = *(ptr + 1);
+		char check = 0;
+		while (0<len--)
+		{
+			check += *checkPtr;
+			checkPtr++;
+		}
+		if (check == 0)
+			return 0;
+	}
+	return -1;
+}
+
+
+
+int acpiEnable(void)
+{
+	// Check if acpi is enabled
+	if ( (inw2((unsigned int) PM1a_CNT) &SCI_EN) == 0 )
+	{
+		// Check if acpi can be enabled
+		if (SMI_CMD != 0 && ACPI_ENABLE != 0)
+		{
+			outb((unsigned int) SMI_CMD, ACPI_ENABLE); // send acpi enable command
+			// Give 3 seconds time to enable acpi
+			int i;
+			for (i=0; i<300; i++ )
+			{
+				if ( (inw2((unsigned int) PM1a_CNT) &SCI_EN) == 1 )
+					break;
+				sleep(10);
+			}
+			if (PM1b_CNT != 0)
+				for (; i<300; i++ )
+				{
+					if ( (inw2((unsigned int) PM1b_CNT) &SCI_EN) == 1 )
+						break;
+					sleep(10);
+				}
+			if (i<300) {
+				wrstr("enabled acpi.\n");
+				return 0;
+			} else {
+				wrstr("couldn't enable acpi.\n");
+				return -1;
+			}
+		} else {
+			wrstr("no known way to enable acpi.\n");
+			return -1;
+		}
+	} else {
+		//wrstr("acpi was already enabled.\n");
+		return 0;
+	}
+}
+int initAcpi(void)
+{
+	unsigned int *ptr = acpiGetRSDPtr();
+
+	// check if address is correct  ( if acpi is available on this pc )
+	if (ptr != NULL && acpiCheckHeader(ptr, "RSDT") == 0)
+	{
+		// the RSDT contains an unknown number of pointers to acpi tables
+		int entrys = *(ptr + 1);
+		entrys = (entrys-36) /4;
+		ptr += 36/4;	// skip header information
+
+		while (0<entrys--)
+		{
+			// check if the desired table is reached
+			if (acpiCheckHeader((unsigned int *) *ptr, "FACP") == 0)
+			{
+				entrys = -2;
+				struct FACP *facp = (struct FACP *) *ptr;
+				if (acpiCheckHeader((unsigned int *) facp->DSDT, "DSDT") == 0)
+				{
+					// search the \_S5 package in the DSDT
+					char *S5Addr = (char *) facp->DSDT +36; // skip header
+					int dsdtLength = *(facp->DSDT+1) -36;
+					while (0 < dsdtLength--)
+					{
+						if ( memcmp(S5Addr, "_S5_", 4) == 0)
+							break;
+						S5Addr++;
+					}
+					// check if \_S5 was found
+					if (dsdtLength > 0)
+					{
+						// check for valid AML structure
+						if ( ( *(S5Addr-1) == 0x08 || ( *(S5Addr-2) == 0x08 && *(S5Addr-1) == '\\') ) && *(S5Addr+4) == 0x12 )
+						{
+							S5Addr += 5;
+							S5Addr += ((*S5Addr &0xC0)>>6) +2;	// calculate PkgLength size
+
+							if (*S5Addr == 0x0A)
+								S5Addr++;	// skip byteprefix
+							SLP_TYPa = *(S5Addr)<<10;
+							S5Addr++;
+
+							if (*S5Addr == 0x0A)
+								S5Addr++;	// skip byteprefix
+							SLP_TYPb = *(S5Addr)<<10;
+
+							SMI_CMD = facp->SMI_CMD;
+
+							ACPI_ENABLE = facp->ACPI_ENABLE;
+							ACPI_DISABLE = facp->ACPI_DISABLE;
+
+							PM1a_CNT = facp->PM1a_CNT_BLK;
+							PM1b_CNT = facp->PM1b_CNT_BLK;
+							
+							PM1_CNT_LEN = facp->PM1_CNT_LEN;
+
+							SLP_EN = 1<<13;
+							SCI_EN = 1;
+
+							return 0;
+						} else {
+							wrstr("\\_S5 parse error.\n");
+						}
+					} else {
+						wrstr("\\_S5 not present.\n");
+					}
+				} else {
+					wrstr("DSDT invalid.\n");
+				}
+			}
+			ptr++;
+		}
+		wrstr("no valid FACP present.\n");
+	} else {
+		wrstr("no acpi.\n");
+	}
+
+	return -1;
+}
+
+
+
+void acpiPowerOff(void)
+{
+	// SCI_EN is set to 1 if acpi shutdown is possible
+	if (SCI_EN == 0)
+		return;
+
+	acpiEnable();
+
+	// send the shutdown command
+	outw2((unsigned int) PM1a_CNT, SLP_TYPa | SLP_EN );
+	if ( PM1b_CNT != 0 )
+		outw2((unsigned int) PM1b_CNT, SLP_TYPb | SLP_EN );
+
+	wrstr("acpi poweroff failed.\n");
+}
