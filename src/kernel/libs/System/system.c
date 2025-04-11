@@ -131,6 +131,76 @@ char* strdup(const char* s) {
     return new;
 }
 
+static char* saved_token = NULL;
+
+// Helper function - counts span of characters in accept
+size_t strspn(const char* str, const char* accept) {
+    const char* p;
+    const char* a;
+    size_t count = 0;
+
+    for (p = str; *p != '\0'; ++p) {
+        for (a = accept; *a != '\0'; ++a) {
+            if (*p == *a) {
+                break;
+            }
+        }
+        if (*a == '\0') {
+            return count;
+        }
+        ++count;
+    }
+    return count;
+}
+
+// Helper function - finds first occurrence of any delimiter
+char* strpbrk(const char* str, const char* delimiters) {
+    const char* d;
+    for (; *str != '\0'; ++str) {
+        for (d = delimiters; *d != '\0'; ++d) {
+            if (*str == *d) {
+                return (char*)str;
+            }
+        }
+    }
+    return NULL;
+}
+
+// Main strtok implementation
+char* strtok(char* str, const char* delimiters) {
+    char* token_start;
+    char* current;
+
+    // If str is NULL, use the saved pointer from previous call
+    if (str == NULL) {
+        if (saved_token == NULL) {
+            return NULL;  // No more tokens
+        }
+        str = saved_token;
+    }
+
+    // Skip leading delimiters
+    str += strspn(str, delimiters);
+    if (*str == '\0') {
+        saved_token = NULL;
+        return NULL;
+    }
+
+    // Find the end of the token
+    token_start = str;
+    str = strpbrk(token_start, delimiters);
+    if (str == NULL) {
+        // This is the last token
+        saved_token = NULL;
+    } else {
+        // Terminate the token and save the next position
+        *str = '\0';
+        saved_token = str + 1;
+    }
+
+    return token_start;
+}
+
 char* strndup(const char* str, size_t n) {
     // Allocate memory for the new string
     char* dup = malloc(n + 1);  // +1 for the null-terminator

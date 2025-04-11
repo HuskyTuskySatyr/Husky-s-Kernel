@@ -48,6 +48,9 @@ int strncmp(const char* s1, const char* s2, size_t n);
 char* strdup(const char* s);
 char *strncpy(char *dest, const char *src, size_t n);
 char* strndup(const char* str, size_t n);
+char* strtok(char* str, const char* delimiters);
+size_t strspn(const char* str, const char* accept);
+char* strpbrk(const char* str, const char* delimiters);
 // ACPI related
 int initAcpi(void);
 void acpiPowerOff(void);

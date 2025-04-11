@@ -27,7 +27,8 @@
         "xutility": "cpp",
         "stdio.h": "c",
         "microshell.h": "c",
-        "time.h": "c"
+        "time.h": "c",
+        "keyboard_layouts.h": "c"
     },
     "makefile.configureOnOpen": false,
     "C_Cpp.errorSquiggles": "disabled"
