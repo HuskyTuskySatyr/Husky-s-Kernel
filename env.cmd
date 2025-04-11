@@ -1,1 +1,1 @@
-docker exec -it ae373a15f235 /bin/bash
+docker run -it --rm -v "C:/Users/Husky/Documents/GitHub/Husky-s-Kernel:/workspace" huskyos-lite
